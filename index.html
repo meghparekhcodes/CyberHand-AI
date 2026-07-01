@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neon Cat's Cradle</title>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;font-family:'Courier New',monospace;}
+  #container{position:relative;width:100vw;height:100vh;}
+  video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;
+        transform:scaleX(-1);opacity:0.35;filter:saturate(1.4) contrast(1.1);}
+  canvas{position:absolute;top:0;left:0;}
+  #hud{position:absolute;top:10px;left:10px;color:#0ff;font-size:13px;
+       text-shadow:0 0 6px #0ff;z-index:10;letter-spacing:1px;}
+  #loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+           color:#0ff;font-size:18px;text-shadow:0 0 10px #0ff;z-index:20;}
+</style>
+</head>
+<body>
+<div id="container">
+  <video id="video" playsinline autoplay muted></video>
+  <div id="hud">CAT'S CRADLE :: NEON LINK SYSTEM</div>
+  <div id="loading">Initializing camera & hand tracking...</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+<script>
+/* ---------------- Global state ---------------- */
+let videoEl;
+let handsResults = null; // raw mediapipe output
+let hands;
+let camera;
+let pCanvas; // p5 canvas reference
+let particles = [];
+
+const FINGERTIPS = [4, 8, 12, 16, 20]; // thumb, index, middle, ring, pinky
+const NEON_COLORS = [
+  [0, 255, 255],   // cyan
+  [255, 0, 255],   // magenta
+  [255, 255, 0]    // yellow
+];
+
+/* ---------------- p5 setup ---------------- */
+function setup() {
+  pCanvas = createCanvas(windowWidth, windowHeight);
+  pCanvas.parent('container');
+  pCanvas.elt.style.zIndex = 5;
+  frameRate(60);
+  colorMode(RGB, 255);
+  initCamera();
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+}
+
+/* ---------------- Camera + MediaPipe init ---------------- */
+function initCamera() {
+  videoEl = document.getElementById('video');
+
+  hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6
+  });
+
+  hands.onResults(onResults);
+
+  navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false })
+    .then((stream) => {
+      videoEl.srcObject = stream;
+      document.getElementById('loading').style.display = 'none';
+
+      camera = new Camera(videoEl, {
+        onFrame: async () => {
+          await hands.send({ image: videoEl });
+        },
+        width: 1280,
+        height: 720
+      });
+      camera.start();
+    })
+    .catch((err) => {
+      document.getElementById('loading').innerText =
+        'Camera access denied or unavailable: ' + err.message;
+    });
+}
+
+function onResults(results) {
+  handsResults = results;
+}
+
+/* ---------------- Helpers ---------------- */
+// Convert normalized landmark (mirrored) to canvas coords
+function lmToScreen(lm) {
+  // video is mirrored via CSS scaleX(-1); mediapipe coords are NOT mirrored,
+  // so flip x to match the mirrored visual.
+  const x = (1 - lm.x) * width;
+  const y = lm.y * height;
+  return { x, y };
+}
+
+function classifyHands(results) {
+  // Returns {Left: landmarks[], Right: landmarks[]} based on label,
+  // but since video is mirrored, MediaPipe's "Left"/"Right" (from the
+  // camera's perspective) needs flipping to match what user sees.
+  const out = {};
+  if (!results.multiHandedness) return out;
+  for (let i = 0; i < results.multiHandedness.length; i++) {
+    let label = results.multiHandedness[i].label; // "Left" or "Right"
+    // flip because image is mirrored for display
+    label = (label === 'Left') ? 'Right' : 'Left';
+    out[label] = results.multiHandLandmarks[i];
+  }
+  return out;
+}
+
+/* ---------------- Drawing ---------------- */
+function draw() {
+  clear();
+  drawScanlineBackdrop();
+
+  if (!handsResults || !handsResults.multiHandLandmarks || handsResults.multiHandLandmarks.length === 0) {
+    drawHud('Searching for hands...');
+    updateParticles();
+    return;
+  }
+
+  const classified = classifyHands(handsResults);
+
+  // Draw skeleton + glowing joints for each hand
+  let idx = 0;
+  for (const label in classified) {
+    const landmarks = classified[label];
+    drawHandGlow(landmarks, idx);
+    idx++;
+  }
+
+  // Draw cradle strings between left & right fingertips
+  if (classified.Left && classified.Right) {
+    drawCradleStrings(classified.Left, classified.Right);
+  } else {
+    drawHud('Show both hands to weave the cradle');
+  }
+
+  updateParticles();
+}
+
+function drawScanlineBackdrop() {
+  // subtle deep midnight-blue tint + scanlines, drawn over the dim video
+  push();
+  noStroke();
+  fill(5, 8, 25, 60);
+  rect(0, 0, width, height);
+
+  stroke(0, 255, 255, 10);
+  strokeWeight(1);
+  for (let y = 0; y < height; y += 4) {
+    line(0, y, width, y);
+  }
+  pop();
+}
+
+function drawHud(msg) {
+  push();
+  noStroke();
+  fill(0, 255, 255, 180);
+  textSize(14);
+  textAlign(CENTER, TOP);
+  text(msg, width / 2, 10);
+  pop();
+}
+
+// Hand connections (simplified MediaPipe topology)
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
+
+function drawHandGlow(landmarks, handIdx) {
+  const baseColor = handIdx === 0 ? [0, 255, 255] : [255, 0, 255]; // cyan / magenta per hand
+
+  // bones
+  push();
+  strokeWeight(1.5);
+  drawingContext.shadowBlur = 12;
+  drawingContext.shadowColor = `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},0.9)`;
+  stroke(baseColor[0], baseColor[1], baseColor[2], 160);
+  noFill();
+  for (const [a, b] of HAND_CONNECTIONS) {
+    const pa = lmToScreen(landmarks[a]);
+    const pb = lmToScreen(landmarks[b]);
+    line(pa.x, pa.y, pb.x, pb.y);
+  }
+  pop();
+
+  // joints
+  push();
+  noStroke();
+  drawingContext.shadowBlur = 18;
+  for (let i = 0; i < landmarks.length; i++) {
+    const p = lmToScreen(landmarks[i]);
+    const isTip = FINGERTIPS.includes(i);
+    const r = isTip ? 7 : 4;
+    const c = isTip ? [255, 255, 0] : baseColor; // tips glow yellow
+    drawingContext.shadowColor = `rgba(${c[0]},${c[1]},${c[2]},1)`;
+    fill(c[0], c[1], c[2], 230);
+    circle(p.x, p.y, r * 2);
+  }
+  pop();
+}
+
+function drawCradleStrings(leftLm, rightLm) {
+  const t = frameCount * 0.05;
+
+  for (let i = 0; i < FINGERTIPS.length; i++) {
+    const lp = lmToScreen(leftLm[FINGERTIPS[i]]);
+    const rp = lmToScreen(rightLm[FINGERTIPS[i]]);
+
+    const d = dist(lp.x, lp.y, rp.x, rp.y);
+    const maxDist = width * 0.9;
+    const stretch = constrain(d / maxDist, 0, 1);
+
+    // color blends across cyan -> magenta -> yellow based on stretch
+    const col = lerpColor3(NEON_COLORS[0], NEON_COLORS[1], NEON_COLORS[2], stretch);
+
+    // thickness: thinner when very stretched, thicker when slack (elastic feel)
+    const weight = lerp(5, 1.2, stretch);
+
+    // slight sinusoidal 'twang' wobble perpendicular to the line, scaled by stretch
+    const midX = (lp.x + rp.x) / 2;
+    const midY = (lp.y + rp.y) / 2;
+    const dx = rp.x - lp.x, dy = rp.y - lp.y;
+    const len = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+    const nx = -dy / len, ny = dx / len;
+    const wobble = sin(t + i * 1.3) * (6 * (1 - stretch) + 1);
+
+    push();
+    noFill();
+    drawingContext.shadowBlur = 25;
+    drawingContext.shadowColor = `rgba(${col[0]},${col[1]},${col[2]},0.95)`;
+    stroke(col[0], col[1], col[2], 230);
+    strokeWeight(weight);
+
+    beginShape();
+    noFill();
+    curveVertex(lp.x, lp.y);
+    curveVertex(lp.x, lp.y);
+    curveVertex(midX + nx * wobble, midY + ny * wobble);
+    curveVertex(rp.x, rp.y);
+    curveVertex(rp.x, rp.y);
+    endShape();
+    pop();
+
+    // touch detection -> particle burst
+    if (d < 28) {
+      spawnParticles(midX, midY, col);
+    }
+  }
+}
+
+function lerpColor3(c1, c2, c3, t) {
+  // t in [0,1]: 0->c1, 0.5->c2, 1->c3
+  let r, g, b;
+  if (t < 0.5) {
+    const k = t / 0.5;
+    r = lerp(c1[0], c2[0], k);
+    g = lerp(c1[1], c2[1], k);
+    b = lerp(c1[2], c2[2], k);
+  } else {
+    const k = (t - 0.5) / 0.5;
+    r = lerp(c2[0], c3[0], k);
+    g = lerp(c2[1], c3[1], k);
+    b = lerp(c2[2], c3[2], k);
+  }
+  return [r, g, b];
+}
+
+/* ---------------- Particle burst on fingertip touch ---------------- */
+function spawnParticles(x, y, col) {
+  // limit spawn rate so we don't flood every frame
+  if (frameCount % 4 !== 0) return;
+  for (let i = 0; i < 6; i++) {
+    particles.push({
+      x, y,
+      vx: random(-3, 3),
+      vy: random(-3, 3),
+      life: 255,
+      col
+    });
+  }
+  if (particles.length > 400) particles.splice(0, particles.length - 400);
+}
+
+function updateParticles() {
+  push();
+  noStroke();
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 8;
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+      continue;
+    }
+    drawingContext.shadowBlur = 15;
+    drawingContext.shadowColor = `rgba(${p.col[0]},${p.col[1]},${p.col[2]},1)`;
+    fill(p.col[0], p.col[1], p.col[2], p.life);
+    circle(p.x, p.y, 5);
+  }
+  pop();
+}
+</script>
+</body>
+</html>
