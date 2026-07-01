@@ -7,8 +7,7 @@ An interactive browser-based hand tracking experience built using **MediaPipe Ha
 ## 🚀 Live Demo
 
 🔗 **Try it here:**  
-https://your-render-link.onrender.com
-
+https://meghparekhcodes.github.io/CyberHand-AI/
 ---
 
 ## ✨ Features
