@@ -34,23 +34,6 @@ https://your-render-link.onrender.com
 
 ---
 
-## 📸 Preview
-
-> Add screenshots or a GIF here.
-
-Example:
-
-```
-screenshots/demo.gif
-```
-
-or
-
-```markdown
-![CyberHand AI Demo](screenshots/demo.gif)
-```
-
----
 
 ## 💻 Run Locally
 
